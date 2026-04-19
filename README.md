@@ -58,3 +58,39 @@ Request: [
 ```
 
 Output tersebut adalah http request yang diterima oleh server kita. Baris pertama, `"GET / HTTP/1.1"`, adalah request line yang berisi metode GET, path yang diminta yaitu `/` (root), serta versi protokol HTTP/1.1. Baris-baris berikutnya adalah header yang memberikan informasi tambahan tentang request. Misalnya, `"Host: 127.0.0.1:7878"` menunjukkan alamat tujuan, `"Connection: keep-alive"` menandakan koneksi tetap dibuka setelah response, dan `"User-Agent: Mozilla/5.0 ..."` mengidentifikasi browser serta sistem operasi yang digunakan. Header seperti `"Accept"` dan `"Accept-Encoding"` menjelaskan jenis konten dan kompresi yang didukung oleh client, sedangkan `"Accept-Language"` menunjukkan preferensi bahasa pengguna. Header `"sec-ch-ua"` dan `"Sec-Fetch-*"` memberikan konteks tambahan tentang perangkat, platform, dan cara request dilakukan. Terakhir, "Cookie: csrftoken=..." berisi data cookie yang biasanya digunakan untuk session atau keamanan.
+
+## Commit 2 reflection notes
+![Commit 2 screen capture](./assets/commit2.png)
+
+```rs
+use std::{
+    fs,
+    io::{BufReader, prelude::*},
+    net::{TcpListener, TcpStream},
+};
+fn main() {
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
+        handle_connection(stream);
+    }
+}
+
+fn handle_connection(mut stream: TcpStream) {
+    let buf_reader = BufReader::new(&mut stream);
+    let http_request: Vec<_> = buf_reader
+        .lines()
+        .map(|result| result.unwrap())
+        .take_while(|line| !line.is_empty())
+        .collect();
+    let status_line = "HTTP/1.1 200 OK";
+    let contents = fs::read_to_string("hello.html").unwrap();
+    let length = contents.len();
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
+    stream.write_all(response.as_bytes()).unwrap();
+}
+```
+
+Pada commit kali ini kita memodifikasi fungsi `handle_connection` agar dapat menunjukkan sebuah html. Modifikasi dimulai dengan mendefinisikan status line http response sebagai `"HTTP/1.1 200 OK"`. Setelah itu fungsi membaca isi file `hello.html` menggunakan `fs::read_to_string` lalu menyimpannya pada variabel `contents`. Setelah itu variabel `length` digunakan untuk menyimpan panjang dari content. Terakhir variable `response` menyimpan http response yang telah dibuat menggunakan data `status_line`, `length`, dan `contents`. Kemudian terakhir response tersebut dikirim balik lewat stream TCP dengan fungsi `write_all`
+
+Dalam format HTTP response yang dibuat, `status_line` adalah baris pertama yang berisi versi HTTP, kode status, dan pesan status untuk memberi tahu client apakah request berhasil atau tidak. `length` merupakan nilai dari header Content-Length yang menunjukkan ukuran body response dalam satuan byte, sehingga client mengetahui kapan data selesai diterima. Sementara itu, `contents` adalah isi utama response (body) yang dikirim ke client, dalam kasus ini adalah HTML namun bisa juga JSON atau teks biasa.
