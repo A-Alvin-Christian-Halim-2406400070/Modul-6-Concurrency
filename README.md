@@ -166,5 +166,35 @@ fn handle_connection(mut stream: TcpStream) {
 }
 ```
 
-Pada refactoring ini kita membuat if-else block tersebut me-return sebuah nilai tuple `(status_line, filename)`. Setelah itu kita menggunakan destructuring untuk assign 2 nilai tersebut ke variable `status_line` dan `filename`. Dengan begitu, kita bisa menggunakan value tersebut pada response constructing kita sehingga kita ada code duplication untuk membuat response. 
+Pada refactoring ini kita membuat if-else block tersebut me-return sebuah nilai tuple `(status_line, filename)`. Setelah itu kita menggunakan destructuring untuk assign 2 nilai tersebut ke variable `status_line` dan `filename`. Dengan begitu, kita bisa menggunakan value tersebut pada response constructing kita sehingga kita ada code duplication untuk membuat response.
+
+## Commit 4 reflection notes
+Pada commit ke-4 ini kita melakukan beberapa perubahan pada fungsi `handle_connection` sebagai berikut
+```rs
+fn handle_connection(mut stream: TcpStream) {
+    let buf_reader = BufReader::new(&mut stream);
+    let request_line = buf_reader.lines().next().unwrap().unwrap();
+    let (status_line, filename) = match &request_line[..] {
+        "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "hello.html"),
+        "GET /sleep HTTP/1.1" => {
+            thread::sleep(Duration::from_secs(5));
+            ("HTTP/1.1 200 OK", "hello.html")
+        }
+        _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
+    };
+
+    let contents = fs::read_to_string(filename).unwrap();
+    let length = contents.len();
+
+    let response =
+        format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
+
+    stream.write_all(response.as_bytes()).unwrap();
+}
+```
+Pertama kita mengubah if-else block sebelumnya menjadi ekspresi `match` untuk melakukan pattern matching pada `request_line`. Dengan pattern matching tersebut, kita menghandle 2 endpoint yaitu `/` dan endpoint baru `/sleep`. Terakhir klausa `_` digunakan untuk menghandle semua request lain yang `request_line`-nya tidak bernilai `"GET / HTTP/1.1"` atau `"GET /sleep HTTP/1.1"` dan memberikan response 404.
+
+Pada endpoint `/sleep` kita menambahkan delay selama 5 detik menggunakan `thread::sleep`. Tujuan endpoint tersebut adalah untuk mensimulasikan permasalahan pada single-threaded web-server. Ketika sebuah browser mengunjungi `/sleep` server akan menjadi tidak responsif terhadap request lain hingga proses delay 5 detik selesai.
+
+Ini terjadi karena server yang bersifat single-threaded hanya dapat menangani satu permintaan dalam satu waktu. Pada bagian loop `for stream in listener.incoming()`, setiap koneksi diproses secara berurutan, sehingga satu koneksi harus selesai terlebih dahulu sebelum koneksi berikutnya dapat ditangani oleh server kita. 
 
