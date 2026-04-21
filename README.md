@@ -309,4 +309,50 @@ Fungsi `execute` pada `ThreadPool` digunakan untuk mengirim tugas ke thread pool
 
 Secara keseluruhan, desain ini menciptakan sistem antrian pekerjaan (job queue) di mana producer (melalui `execute`) mengirim tugas, dan sekumpulan consumer (worker threads) mengambil serta mengeksekusinya secara paralel. Penggunaan `Mutex` memastikan akses ke `receiver` tetap aman dari kondisi balapan (race condition), sementara `Arc` memungkinkan kepemilikan bersama antar thread tanpa melanggar aturan kepemilikan Rust.
 
+## Bonus
+Untuk commit kali ini saya membuat fungsi `build` yang akan menggantikan fungsi `new` pada `ThreadPool`
+
+```rs
+impl ThreadPool {
+
+    /// Create a new ThreadPool, returning a Result.
+    ///
+    /// The size is the number of threads in the pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PoolCreationError` if the size is zero.
+    pub fn build(size: usize) -> Result<ThreadPool, PoolCreationError> {
+        if size == 0 {
+            return Err(PoolCreationError);
+        }
+
+        let (sender, receiver) = mpsc::channel();
+
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        }
+
+        Ok(ThreadPool { workers, sender })
+    }
+
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+
+        self.sender.send(job).unwrap();
+    }
+}
+```
+Terdapat beberapa perbedaan utama antara kedua fungsi tersebut. Pertama, mekanisme error handling. Fungsi `new` menggunakan `assert!` macro yang akan menyebabkan program panic jika ukuran thread pool adalah 0. Ini merupakan error yang tidak dapat dipulihkan (_unrecoverable error_). Sebaliknya, fungsi `build` menggunakan `Result<T, E>` yang mengembalikan error tanpa panic, sehingga error handling menjadi tanggung jawab caller (_recoverable error_). Kedua, dari segi return type, fungsi `new` mengembalikan `ThreadPool` secara langsung, sedangkan fungsi `build` mengembalikan `Result<ThreadPool, PoolCreationError>`.
+
+Fungsi `build` memiliki dua keuntungan utama dibandingkan dengan fungsi `new`. Pertama adalah kontrol error handling yang lebih baik. Dengan `build`, caller memiliki kebebasan untuk menentukan bagaimana menangani error creation, baik menggunakan `?` operator untuk propagasi error, `match` untuk custom handling, atau bahkan `.expect()` untuk behavior yang mirip dengan `new`. Keuntungan kedua adalah composability dan fleksibilitas yang lebih tinggi. `Result` dapat digunakan dengan combinator methods seperti `.map()`, `.and_then()`, dan `.or_else()`, yang memudahkan integrasi dengan code flow yang lebih kompleks.
+
+
 
