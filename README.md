@@ -198,3 +198,115 @@ Pada endpoint `/sleep` kita menambahkan delay selama 5 detik menggunakan `thread
 
 Ini terjadi karena server yang bersifat single-threaded hanya dapat menangani satu permintaan dalam satu waktu. Pada bagian loop `for stream in listener.incoming()`, setiap koneksi diproses secara berurutan, sehingga satu koneksi harus selesai terlebih dahulu sebelum koneksi berikutnya dapat ditangani oleh server kita. 
 
+
+## Commit 5 reflection notes
+Pada commit ini kita melakukan perubahan pada kode `main.rs` dan menambahkan file baru yaitu `lib.rs`
+
+```rs
+// src/main.rs
+
+use std::{
+    fs,
+    io::{BufReader, prelude::*},
+    net::{TcpListener, TcpStream},
+    thread,
+    time::Duration,
+};
+use hello::ThreadPool;
+
+fn main() {
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+    let pool = ThreadPool::new(4);
+
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
+
+        pool.execute(|| {
+            handle_connection(stream);
+        });
+    }
+}
+```
+```rs
+// src/lib.rs
+
+use std::{
+    sync::{Arc, Mutex, mpsc},
+    thread,
+};
+
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: mpsc::Sender<Job>,
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+impl ThreadPool {
+    /// Create a new ThreadPool.
+    ///
+    /// The size is the number of threads in the pool.
+    ///
+    /// # Panics
+    ///
+    /// The `new` function will panic if the size is zero.
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        }
+
+        ThreadPool { workers, sender }
+    }
+
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+
+        self.sender.send(job).unwrap();
+    }
+}
+
+struct Worker {
+    id: usize,
+    thread: thread::JoinHandle<()>,
+}
+
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+        let thread = thread::spawn(move || {
+            loop {
+                let job = receiver.lock().unwrap().recv().unwrap();
+
+                println!("Worker {id} got a job; executing.");
+
+                job();
+            }
+        });
+
+        Worker { id, thread }
+    }
+}
+```
+
+
+Pada commit ini kita mengubah server kita menjadi multhi-threaded server dengan implementasi Thread Pool. Kita memodifikasi kode `main.rs` kita agar membuat instance `ThreadPool` dengan 4 workers dan kemudian menggunakan `pool.execute` untuk membagi tugas penganganan koneksi ke thread pool.
+
+Implementasi Thread Pool ini bekerja dengan memanfaatkan kombinasi channel (mpsc), thread, serta sinkronisasi menggunakan `Arc<Mutex<...>>` untuk mengelola eksekusi tugas secara paralel. Ketika `ThreadPool::new(size)` dipanggil, program terlebih dahulu membuat sebuah channel menggunakan `mpsc::channel()`, yang terdiri dari `sender` dan `receiver`. `sender` akan digunakan untuk mengirim pekerjaan (job), sedangkan `receiver` akan dibagikan ke semua worker. Karena beberapa thread perlu mengakses `receiver` yang sama, maka `receiver` dibungkus dalam `Arc` (Atomic Reference Counting) agar dapat dimiliki bersama, dan `Mutex` untuk memastikan hanya satu thread yang mengambil job pada satu waktu.
+
+Selanjutnya, sejumlah worker sesuai parameter `size` dibuat dan disimpan dalam vector `workers`. Setiap `Worker` menjalankan thread sendiri melalui `thread::spawn`, dan di dalam thread tersebut terdapat loop tak berhingga (`loop`) yang terus menunggu job baru. Worker akan mencoba mengunci (`lock`) `receiver`, lalu memanggil `recv()` untuk mengambil job dari channel. Pemanggilan `recv()` ini bersifat blocking, sehingga thread akan “tidur” sampai ada job yang tersedia. Ketika job diterima, worker mencetak pesan lalu mengeksekusi closure tersebut.
+
+Fungsi `execute` pada `ThreadPool` digunakan untuk mengirim tugas ke thread pool. Fungsi ini menerima closure generik yang memenuhi trait `FnOnce + Send + 'static`, lalu membungkusnya dalam `Box` agar dapat disimpan sebagai trait object (`Job`). Job tersebut kemudian dikirim melalui `sender` ke channel. Salah satu worker yang sedang menunggu akan menerima job tersebut dan menjalankannya.
+
+Secara keseluruhan, desain ini menciptakan sistem antrian pekerjaan (job queue) di mana producer (melalui `execute`) mengirim tugas, dan sekumpulan consumer (worker threads) mengambil serta mengeksekusinya secara paralel. Penggunaan `Mutex` memastikan akses ke `receiver` tetap aman dari kondisi balapan (race condition), sementara `Arc` memungkinkan kepemilikan bersama antar thread tanpa melanggar aturan kepemilikan Rust.
+
+
